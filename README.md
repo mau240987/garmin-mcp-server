@@ -1,38 +1,46 @@
-# garmin-mcp-server (Python)
+# garmin-mcp-server
 
-MCP Server per Garmin Connect — legge attività, dati salute, e carica workout/piani di allenamento strutturati su Garmin Connect.
+MCP Server for Garmin Connect — read activities, health metrics, and push structured training plans from any AI assistant that supports the [Model Context Protocol](https://modelcontextprotocol.io).
 
-Usa la libreria **garminconnect** Python (testata e validata con dati reali).
+Built on the battle-tested [garminconnect](https://github.com/cyberjunky/python-garminconnect) Python library (134 API methods).
 
 ---
 
-## Tools disponibili (9)
+## Features
 
-| Tool | Tipo | Descrizione |
+| Tool | Type | Description |
 |---|---|---|
-| `get_activities` | Read | Lista attività recenti con distanza, ritmo, FC, calorie |
-| `get_activity_details` | Read | Dettaglio completo: split, lap, dinamiche di corsa |
-| `get_health_summary` | Read | Steps, resting HR, HRV, stress, sonno, body battery, SpO2, training readiness |
-| `get_training_status` | Read | Volume settimanale: km totali, numero sessioni, passo medio |
-| `get_workouts` | Read | Lista workout salvati su Garmin Connect |
-| `push_workout` | Write | Crea un workout strutturato con doppio target (ritmo + FC) |
-| `push_training_plan` | Write | Carica un piano multi-giorno sul calendario Garmin |
-| `delete_workout` | Write | Cancella un workout specifico |
-| `delete_plan_workouts` | Write | Cancella tutti i workout di un piano (per nome) |
+| `get_activities` | Read | Recent activities with distance, pace, HR, calories |
+| `get_activity_details` | Read | Full detail: splits, laps, running dynamics |
+| `get_health_summary` | Read | Steps, resting HR, HRV, stress, sleep, body battery, SpO2, training readiness |
+| `get_training_status` | Read | Weekly volume: total km, session count, avg pace |
+| `get_workouts` | Read | List workouts saved on Garmin Connect |
+| `push_workout` | Write | Create a structured workout with dual targets (pace + HR) |
+| `push_training_plan` | Write | Schedule a multi-day plan on the Garmin calendar |
+| `delete_workout` | Write | Delete a specific workout |
+| `delete_plan_workouts` | Write | Bulk-delete workouts by name pattern |
 
 ---
 
 ## Quick start
 
-### Prerequisiti
+### Prerequisites
+
+- Python 3.10+
+- A Garmin Connect account
+- A Garmin device (for workout sync)
+
+### Install
 
 ```bash
-pip install mcp garminconnect pydantic
+git clone https://github.com/mrosano1987/garmin-mcp-server.git
+cd garmin-mcp-server
+pip install -r requirements.txt
 ```
 
-### Modalità 1 — Claude Desktop (stdio)
+### Mode 1 — Claude Desktop (stdio)
 
-Aggiungi a `claude_desktop_config.json`:
+Add to your `claude_desktop_config.json`:
 
 ```json
 {
@@ -41,35 +49,37 @@ Aggiungi a `claude_desktop_config.json`:
       "command": "python",
       "args": ["/path/to/garmin_mcp_server.py"],
       "env": {
-        "GARMIN_EMAIL": "tua@email.com",
-        "GARMIN_PASSWORD": "tuapassword"
+        "GARMIN_EMAIL": "your@email.com",
+        "GARMIN_PASSWORD": "yourpassword"
       }
     }
   }
 }
 ```
 
-### Modalità 2 — Claude Code
+### Mode 2 — Claude Code
 
 ```bash
-export GARMIN_EMAIL="tua@email.com"
-export GARMIN_PASSWORD="tuapassword"
+export GARMIN_EMAIL="your@email.com"
+export GARMIN_PASSWORD="yourpassword"
 claude mcp add garmin -- python /path/to/garmin_mcp_server.py
 ```
 
-### Modalità 3 — HTTP (client remoti, claude.ai)
+### Mode 3 — HTTP (remote clients)
 
 ```bash
-export GARMIN_EMAIL="tua@email.com"
-export GARMIN_PASSWORD="tuapassword"
+export GARMIN_EMAIL="your@email.com"
+export GARMIN_PASSWORD="yourpassword"
 python garmin_mcp_server.py --transport http --port 8000
 ```
 
-Poi collega: `http://tuoserver:8000/mcp`
+Then connect your MCP client to `http://yourserver:8000/mcp`.
 
 ---
 
-## Formato step per push_workout
+## Workout step format
+
+The `push_workout` tool accepts a JSON array of steps:
 
 ```json
 [
@@ -130,42 +140,56 @@ Poi collega: `http://tuoserver:8000/mcp`
 ]
 ```
 
-### Regole target
+### Step types
 
-- `primary: "hr"` → la frequenza cardiaca è il target principale sul watch, il ritmo è secondario
-- `primary: "pace"` → il ritmo è il target principale, la FC è secondaria
-- `primary: "none"` → nessun target (a percezione)
+- `warmup`, `run`, `recover`, `cooldown`, `rest` — single steps
+- `repeat` — wraps a list of `steps` and repeats them `repeat_count` times
 
-Questo è lo stesso formato doppio target testato e funzionante dello script `upload_workouts_venezia_v3.py`, con i `targetValueOne/Two` hoistati correttamente al livello root dello step.
+### Duration types
 
----
+- `time` — duration in seconds
+- `distance` — duration in meters
+- `open` — press lap button to advance
 
-## Esempio prompt per Claude
+### Target priority
 
-```
-"Mostrami le ultime 10 corse con ritmo e frequenza cardiaca"
+- `primary: "hr"` — heart rate is the main target on the watch, pace is secondary
+- `primary: "pace"` — pace is the main target, HR is secondary
+- `primary: "none"` — no target (feel-based effort)
 
-"Com'è stato il mio sonno questa settimana?"
-
-"Crea un allenamento di tempo run per domani: 15 min riscaldamento,
- 4x1km a 5:00/km con 2min recupero, 10 min defaticamento.
- FC primaria sui facili (130-147), ritmo primario sugli intervalli."
-
-"Carica il piano allenamento del prossimo mese: martedì facile 10km,
- giovedì progressivo 12km, domenica lungo da 20km a 30km crescente."
-
-"Quanto ho corso nelle ultime 4 settimane? Sto aumentando troppo il volume?"
-
-"Cancella tutti i workout del piano vecchio e ricarica quelli nuovi."
-```
+Both targets are displayed simultaneously on the watch. The `targetValueOne/Two` fields are hoisted to the step root level (required for Garmin to correctly parse dual targets).
 
 ---
 
-## Autenticazione
+## Example prompts
 
-Il server usa `garminconnect` che si autentica con email/password e gestisce internamente i token OAuth (via `garth`, token longevi ~1 anno). **La password non viene salvata** — solo i token di sessione sono persistiti da garth in `~/.garth/`.
+Once connected to an AI assistant:
 
-Se hai MFA attivo, fai prima il login interattivo:
+```
+"Show me my last 10 runs with pace and heart rate"
+
+"How has my sleep been this week?"
+
+"Create a tempo run for tomorrow: 15 min warmup,
+ 4x1km at 5:00/km with 2min recovery, 10 min cooldown.
+ HR primary on easy parts (130-147), pace primary on intervals."
+
+"Push a 4-week training plan: Tuesday easy 10km,
+ Thursday progressive 12km, Sunday long run
+ starting at 20km and adding 2km per week."
+
+"What's my training load for the last 30 days? Am I overtraining?"
+
+"Delete all workouts from the old plan and re-upload the new ones."
+```
+
+---
+
+## Authentication
+
+The server uses `garminconnect`, which authenticates with email/password and internally manages OAuth tokens via [garth](https://github.com/matin/garth) (long-lived tokens, ~1 year). **No password is stored permanently** — only session tokens are persisted by garth in `~/.garth/`.
+
+If your account has MFA enabled, run the interactive login first:
 
 ```bash
 python -c "from garminconnect import Garmin; g = Garmin('email', 'pass'); g.login()"
@@ -173,23 +197,9 @@ python -c "from garminconnect import Garmin; g = Garmin('email', 'pass'); g.logi
 
 ---
 
-## Differenze rispetto al server TypeScript
-
-| | TypeScript (precedente) | Python (questo) |
-|---|---|---|
-| Libreria Garmin | garmin-connect npm (basica) | garminconnect Python (134 metodi, testata) |
-| Doppio target | Non supportato | ✅ Completo (fix v3 hoisted) |
-| upload_running_workout | Non disponibile | ✅ Nativo |
-| schedule_workout | Wrappato in try/catch vuoto | ✅ Funzionante |
-| delete_workout | Non implementato | ✅ Implementato |
-| Health data | Solo steps, HR, sleep | ✅ Steps, HR, HRV, stress, sleep, body battery, SpO2, training readiness |
-| Testato con dati reali | No | Sì (script v3 validato su Garmin Connect) |
-
----
-
 ## Disclaimer
 
-Progetto non affiliato con Garmin. Usa `garminconnect` che si basa su endpoint reverse-engineered. Solo per uso personale.
+This project is not affiliated with, endorsed by, or sponsored by Garmin Ltd. It uses `garminconnect`, which relies on reverse-engineered endpoints. Use at your own risk, for personal use only. Garmin may change their API at any time, which could break this server.
 
 ## License
 
