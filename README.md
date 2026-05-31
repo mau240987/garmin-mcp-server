@@ -2,7 +2,7 @@
 
 MCP Server for Garmin Connect — read activities, health metrics, and push structured training plans from any AI assistant that supports the [Model Context Protocol](https://modelcontextprotocol.io).
 
-Built on the battle-tested [garminconnect](https://github.com/cyberjunky/python-garminconnect) Python library (134 API methods).
+Built on the battle-tested [garminconnect](https://github.com/cyberjunky/python-garminconnect) Python library.
 
 ---
 
@@ -24,30 +24,94 @@ Built on the battle-tested [garminconnect](https://github.com/cyberjunky/python-
 
 ## Quick start
 
-### Prerequisites
+### Option 1 — Docker (recommended)
 
-- Python 3.10+
-- A Garmin Connect account
-- A Garmin device (for workout sync)
+The easiest way. One command to start, no Python setup needed.
 
-### Install
+**First run** (authenticates and saves tokens):
 
 ```bash
-git clone https://github.com/mrosano1987/garmin-mcp-server.git
+docker compose up -d \
+  -e GARMIN_EMAIL=your@email.com \
+  -e GARMIN_PASSWORD=yourpassword
+```
+
+Or without Compose:
+
+```bash
+docker run -d \
+  --name garmin-mcp \
+  -p 8000:8000 \
+  -e GARMIN_EMAIL=your@email.com \
+  -e GARMIN_PASSWORD=yourpassword \
+  -v garmin-tokens:/data/garth \
+  garmin-mcp-server
+```
+
+**Subsequent runs** (tokens are saved, no credentials needed):
+
+```bash
+docker run -d \
+  --name garmin-mcp \
+  -p 8000:8000 \
+  -v garmin-tokens:/data/garth \
+  garmin-mcp-server
+```
+
+The server starts in HTTP mode at `http://localhost:8000/mcp`.
+
+#### Build the image
+
+```bash
+git clone https://github.com/mau240987/garmin-mcp-server.git
+cd garmin-mcp-server
+docker build -t garmin-mcp-server .
+```
+
+#### Connect to Claude Desktop
+
+Claude Desktop can connect to HTTP MCP servers using [mcp-remote](https://www.npmjs.com/package/mcp-remote). Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "garmin": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://localhost:8000/mcp"]
+    }
+  }
+}
+```
+
+Then restart Claude Desktop. You should see the Garmin tools available (hammer icon in the input bar).
+
+---
+
+### Option 2 — Direct Python (stdio)
+
+Best for Claude Desktop / Claude Code without Docker.
+
+#### Install
+
+```bash
+git clone https://github.com/mau240987/garmin-mcp-server.git
 cd garmin-mcp-server
 pip install -r requirements.txt
 ```
 
-### Mode 1 — Claude Desktop (stdio)
+#### Claude Desktop
 
-Add to your `claude_desktop_config.json`:
+Add to `claude_desktop_config.json`:
+
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
 {
   "mcpServers": {
     "garmin": {
       "command": "python",
-      "args": ["/path/to/garmin_mcp_server.py"],
+      "args": ["/full/path/to/garmin_mcp_server.py"],
       "env": {
         "GARMIN_EMAIL": "your@email.com",
         "GARMIN_PASSWORD": "yourpassword"
@@ -57,7 +121,9 @@ Add to your `claude_desktop_config.json`:
 }
 ```
 
-### Mode 2 — Claude Code
+> After the first login, garth tokens are saved in `~/.garth/`. You can then remove the credentials from the config and the server will use the saved tokens.
+
+#### Claude Code
 
 ```bash
 export GARMIN_EMAIL="your@email.com"
@@ -65,7 +131,7 @@ export GARMIN_PASSWORD="yourpassword"
 claude mcp add garmin -- python /path/to/garmin_mcp_server.py
 ```
 
-### Mode 3 — HTTP (remote clients)
+#### HTTP mode (no Docker)
 
 ```bash
 export GARMIN_EMAIL="your@email.com"
@@ -73,7 +139,34 @@ export GARMIN_PASSWORD="yourpassword"
 python garmin_mcp_server.py --transport http --port 8000
 ```
 
-Then connect your MCP client to `http://yourserver:8000/mcp`.
+---
+
+## Authentication flow
+
+```
+First run                          Subsequent runs
+─────────                          ────────────────
+GARMIN_EMAIL + PASSWORD             (not needed)
+        │                                │
+        ▼                                ▼
+   garminconnect                   garth tokens
+   OAuth login                    from ~/.garth/
+        │                                │
+        ▼                                ▼
+   Save tokens ──────────────────► Resume session
+   to ~/.garth/                          │
+        │                                ▼
+        ▼                          Ready to use
+   Ready to use
+```
+
+Credentials are only needed **once**. After the first successful login, OAuth tokens are persisted by [garth](https://github.com/matin/garth) (~1 year lifetime). No passwords are stored.
+
+If your account has MFA enabled, do the first login interactively:
+
+```bash
+python -c "from garminconnect import Garmin; g = Garmin('email', 'pass'); g.login()"
+```
 
 ---
 
@@ -94,33 +187,21 @@ The `push_workout` tool accepts a JSON array of steps:
     "primary": "hr"
   },
   {
-    "type": "run",
-    "duration_type": "distance",
-    "duration_value": 5000,
-    "pace_low": "6:20",
-    "pace_high": "6:00",
-    "hr_low": 135,
-    "hr_high": 150,
-    "primary": "hr"
-  },
-  {
     "type": "repeat",
-    "repeat_count": 6,
+    "repeat_count": 4,
     "steps": [
       {
         "type": "run",
-        "duration_type": "time",
-        "duration_value": 20,
-        "pace_low": "5:00",
-        "pace_high": "4:10",
+        "duration_type": "distance",
+        "duration_value": 1000,
+        "pace_low": "5:10",
+        "pace_high": "4:50",
         "primary": "pace"
       },
       {
         "type": "recover",
         "duration_type": "time",
-        "duration_value": 40,
-        "pace_low": "7:30",
-        "pace_high": "6:30",
+        "duration_value": 120,
         "hr_low": 120,
         "hr_high": 145,
         "primary": "hr"
@@ -130,11 +211,9 @@ The `push_workout` tool accepts a JSON array of steps:
   {
     "type": "cooldown",
     "duration_type": "time",
-    "duration_value": 300,
+    "duration_value": 600,
     "pace_low": "7:30",
     "pace_high": "6:30",
-    "hr_low": 110,
-    "hr_high": 140,
     "primary": "hr"
   }
 ]
@@ -142,28 +221,36 @@ The `push_workout` tool accepts a JSON array of steps:
 
 ### Step types
 
-- `warmup`, `run`, `recover`, `cooldown`, `rest` — single steps
-- `repeat` — wraps a list of `steps` and repeats them `repeat_count` times
+| Type | Description |
+|---|---|
+| `warmup` | Warm-up phase |
+| `run` | Main interval / work phase |
+| `recover` | Recovery between intervals |
+| `cooldown` | Cool-down phase |
+| `rest` | Full rest (standing) |
+| `repeat` | Repeat group — wraps nested `steps` × `repeat_count` |
 
 ### Duration types
 
-- `time` — duration in seconds
-- `distance` — duration in meters
-- `open` — press lap button to advance
+| Type | `duration_value` unit |
+|---|---|
+| `time` | seconds |
+| `distance` | meters |
+| `open` | lap button press |
 
 ### Target priority
 
-- `primary: "hr"` — heart rate is the main target on the watch, pace is secondary
-- `primary: "pace"` — pace is the main target, HR is secondary
-- `primary: "none"` — no target (feel-based effort)
+| `primary` | Behavior on watch |
+|---|---|
+| `"hr"` | Heart rate = main gauge, pace = secondary |
+| `"pace"` | Pace = main gauge, HR = secondary |
+| `"none"` | No target (feel-based effort) |
 
-Both targets are displayed simultaneously on the watch. The `targetValueOne/Two` fields are hoisted to the step root level (required for Garmin to correctly parse dual targets).
+Both targets are displayed simultaneously on the watch. The `targetValueOne/Two` fields are hoisted to the step root level, which is required for Garmin to correctly parse dual targets.
 
 ---
 
 ## Example prompts
-
-Once connected to an AI assistant:
 
 ```
 "Show me my last 10 runs with pace and heart rate"
@@ -178,21 +265,9 @@ Once connected to an AI assistant:
  Thursday progressive 12km, Sunday long run
  starting at 20km and adding 2km per week."
 
-"What's my training load for the last 30 days? Am I overtraining?"
+"What's my training load for the last 30 days?"
 
 "Delete all workouts from the old plan and re-upload the new ones."
-```
-
----
-
-## Authentication
-
-The server uses `garminconnect`, which authenticates with email/password and internally manages OAuth tokens via [garth](https://github.com/matin/garth) (long-lived tokens, ~1 year). **No password is stored permanently** — only session tokens are persisted by garth in `~/.garth/`.
-
-If your account has MFA enabled, run the interactive login first:
-
-```bash
-python -c "from garminconnect import Garmin; g = Garmin('email', 'pass'); g.login()"
 ```
 
 ---

@@ -1,0 +1,19 @@
+services:
+  garmin-mcp:
+    build: .
+    image: garmin-mcp-server
+    container_name: garmin-mcp-server
+    ports:
+      - "8000:8000"
+    environment:
+      # Required on first run only. After the first login, tokens are saved
+      # in the garmin-tokens volume and credentials can be removed.
+      - GARMIN_EMAIL=${GARMIN_EMAIL:-}
+      - GARMIN_PASSWORD=${GARMIN_PASSWORD:-}
+    volumes:
+      # Persist Garmin auth tokens across container restarts
+      - garmin-tokens:/data/garth
+    restart: unless-stopped
+
+volumes:
+  garmin-tokens:

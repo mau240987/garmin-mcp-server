@@ -9,13 +9,13 @@ Uses the garminconnect Python library (tested and validated with real Garmin dat
 
 Transport modes:
   - stdio:            Claude Desktop, Claude Code, VS Code Copilot
-  - streamable-http:  Remote clients (claude.ai, web apps)
+  - streamable-http:  Remote clients (claude.ai, web apps), Docker
 
 Usage:
   # stdio (Claude Desktop)
   python garmin_mcp_server.py
 
-  # HTTP (remote clients)
+  # HTTP (remote / Docker)
   python garmin_mcp_server.py --transport http --port 8000
 
   # Claude Code
@@ -25,9 +25,11 @@ Requires: pip install mcp garminconnect pydantic
 """
 
 import os
+import sys
 import json
 import logging
 from datetime import datetime, timedelta, date
+from pathlib import Path
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -48,37 +50,86 @@ from garminconnect.workout import (
 
 GARMIN_EMAIL = os.environ.get("GARMIN_EMAIL", "")
 GARMIN_PASSWORD = os.environ.get("GARMIN_PASSWORD", "")
+GARTH_TOKEN_DIR = os.environ.get("GARTH_TOKEN_DIR", "~/.garth")
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    stream=sys.stderr,
+)
 logger = logging.getLogger("garmin-mcp")
 
 # ============================================================
-# Garmin client singleton (lazy init)
+# Garmin client singleton (lazy init with token persistence)
 # ============================================================
 
 _garmin_client: Optional[Garmin] = None
 
 
+def get_token_dir() -> str:
+    """Get the resolved garth token directory path."""
+    return str(Path(GARTH_TOKEN_DIR).expanduser())
+
+
+def has_saved_tokens() -> bool:
+    """Check if garth tokens exist on disk."""
+    token_dir = get_token_dir()
+    return (
+        Path(token_dir).exists()
+        and any(Path(token_dir).iterdir())
+    )
+
+
 def get_garmin() -> Garmin:
-    """Get authenticated Garmin client. Logs in once, reuses session."""
+    """
+    Get authenticated Garmin client.
+
+    Auth strategy:
+      1. Try to resume session from saved garth tokens (no credentials needed)
+      2. If no tokens, login with email/password and save tokens for next time
+    """
     global _garmin_client
     if _garmin_client is not None:
         return _garmin_client
 
+    token_dir = get_token_dir()
+
+    # Strategy 1: resume from saved tokens
+    if has_saved_tokens():
+        try:
+            client = Garmin()
+            client.login(token_dir)
+            _garmin_client = client
+            logger.info("Garmin Connect: resumed session from saved tokens (%s)", token_dir)
+            return client
+        except Exception as e:
+            logger.warning("Saved tokens expired or invalid: %s — trying credentials...", e)
+
+    # Strategy 2: fresh login with credentials
     if not GARMIN_EMAIL or not GARMIN_PASSWORD:
         raise RuntimeError(
-            "Missing Garmin credentials. Set GARMIN_EMAIL and GARMIN_PASSWORD "
-            "environment variables."
+            "No saved Garmin session and no credentials provided.\n"
+            "Set GARMIN_EMAIL and GARMIN_PASSWORD environment variables for first login.\n"
+            "After the first successful login, tokens are saved and credentials are no longer needed."
         )
 
     client = Garmin(GARMIN_EMAIL, GARMIN_PASSWORD)
     client.login()
+
+    # Save tokens for future sessions
+    try:
+        Path(token_dir).mkdir(parents=True, exist_ok=True)
+        client.garth.dump(token_dir)
+        logger.info("Garmin Connect: logged in as %s — tokens saved to %s", GARMIN_EMAIL, token_dir)
+    except Exception as e:
+        logger.warning("Login OK but could not save tokens: %s", e)
+
     _garmin_client = client
-    logger.info("Garmin Connect: authenticated as %s", GARMIN_EMAIL)
     return client
 
 
 # ============================================================
-# Helpers — copied from our tested upload_workouts_venezia_v3.py
+# Helpers — from our tested upload_workouts_venezia_v3.py
 # ============================================================
 
 
@@ -239,8 +290,8 @@ mcp = FastMCP(
     instructions=(
         "MCP server for Garmin Connect. Provides tools to read activities, "
         "health data, training status, and push structured workouts/training plans "
-        "to a Garmin device. Authenticate once with GARMIN_EMAIL/GARMIN_PASSWORD "
-        "environment variables."
+        "to a Garmin device. On first use, requires GARMIN_EMAIL and GARMIN_PASSWORD. "
+        "After the first login, tokens are saved and credentials are no longer needed."
     ),
 )
 
@@ -314,7 +365,6 @@ def get_activity_details(activity_id: str) -> str:
     """
     client = get_garmin()
     details = client.get_activity(activity_id)
-    # Return a cleaned-up JSON summary
     return json.dumps(details, indent=2, default=str)
 
 
@@ -334,7 +384,6 @@ def get_health_summary(date_str: str) -> str:
 
     lines = [f"Health summary for {d}:\n"]
 
-    # Steps
     try:
         steps = client.get_daily_steps(d)
         total = sum(s.get("totalSteps", 0) for s in steps) if isinstance(steps, list) else 0
@@ -342,7 +391,6 @@ def get_health_summary(date_str: str) -> str:
     except Exception:
         pass
 
-    # Heart rate
     try:
         hr = client.get_heart_rates(d)
         rhr = hr.get("restingHeartRate") if isinstance(hr, dict) else None
@@ -351,7 +399,6 @@ def get_health_summary(date_str: str) -> str:
     except Exception:
         pass
 
-    # HRV
     try:
         hrv = client.get_hrv_data(d)
         if isinstance(hrv, dict):
@@ -362,7 +409,6 @@ def get_health_summary(date_str: str) -> str:
     except Exception:
         pass
 
-    # Stress
     try:
         stress = client.get_stress_data(d)
         if isinstance(stress, dict):
@@ -372,7 +418,6 @@ def get_health_summary(date_str: str) -> str:
     except Exception:
         pass
 
-    # Sleep
     try:
         sleep = client.get_sleep_data(d)
         if isinstance(sleep, dict):
@@ -383,7 +428,6 @@ def get_health_summary(date_str: str) -> str:
     except Exception:
         pass
 
-    # Body battery
     try:
         bb = client.get_body_battery(d)
         if isinstance(bb, list) and bb:
@@ -393,7 +437,6 @@ def get_health_summary(date_str: str) -> str:
     except Exception:
         pass
 
-    # SpO2
     try:
         spo2 = client.get_spo2_data(d)
         if isinstance(spo2, dict):
@@ -403,7 +446,6 @@ def get_health_summary(date_str: str) -> str:
     except Exception:
         pass
 
-    # Training readiness
     try:
         tr = client.get_training_readiness(d)
         if isinstance(tr, dict):
@@ -513,7 +555,6 @@ def push_workout(
 
     The workout syncs to the user's Garmin device. Supports warmup, intervals,
     recovery, and cooldown steps with pace and/or heart rate targets.
-    Uses the same tested format from our upload_workouts_venezia_v3.py script.
 
     Args:
         name: Workout name (e.g., "Mar - 10km Facili + Allunghi")
@@ -552,7 +593,6 @@ def push_workout(
         dur_val = s.get("duration_value", 600)
         primary = s.get("primary", "hr")
 
-        # Handle repeats
         if stype == "repeat":
             inner = [build_step(sub) for sub in s.get("steps", [])]
             flat = []
@@ -563,7 +603,6 @@ def push_workout(
                     flat.append(item)
             return create_repeat_group(s.get("repeat_count", 1), flat, next_order())
 
-        # Step type mapping
         step_map = {
             "warmup": (StepType.WARMUP, "warmup", 1),
             "run": (StepType.INTERVAL, "interval", 3),
@@ -573,7 +612,6 @@ def push_workout(
         }
         st, sk, sid = step_map.get(stype, step_map["run"])
 
-        # End condition
         if dur_type == "distance":
             cond = distance_condition(dur_val)
         elif dur_type == "open":
@@ -581,7 +619,6 @@ def push_workout(
         else:
             cond = time_condition(dur_val)
 
-        # Targets
         pace_low = s.get("pace_low")
         pace_high = s.get("pace_high")
         hr_low = s.get("hr_low")
@@ -618,16 +655,16 @@ def push_workout(
     result = client.upload_running_workout(workout)
     workout_id = result.get("workoutId")
 
-    msg = f"✅ Workout '{name}' created (ID: {workout_id})"
+    msg = f"Workout '{name}' created (ID: {workout_id})"
 
     if schedule_date and workout_id:
         try:
             client.schedule_workout(workout_id, schedule_date)
-            msg += f"\n📅 Scheduled for {schedule_date}"
+            msg += f"\nScheduled for {schedule_date}"
         except Exception as e:
-            msg += f"\n⚠️ Created but scheduling failed: {e}"
+            msg += f"\nCreated but scheduling failed: {e}"
 
-    msg += "\n🔄 Sync your Garmin device to get the workout."
+    msg += "\nSync your Garmin device to get the workout."
     return msg
 
 
@@ -659,6 +696,8 @@ def push_training_plan(
     except json.JSONDecodeError as e:
         return f"Invalid plan JSON: {e}"
 
+    import time as _time
+
     base = date.fromisoformat(start_date)
     success = 0
     errors = []
@@ -677,26 +716,25 @@ def push_training_plan(
                 estimated_duration_minutes=w_dur,
                 schedule_date=w_date.isoformat(),
             )
-            if "✅" in result:
+            if "created" in result.lower():
                 success += 1
             else:
                 errors.append(f"Day +{offset}: {result}")
         except Exception as e:
             errors.append(f"Day +{offset} ({w_name}): {e}")
 
-        import time
-        time.sleep(0.5)
+        _time.sleep(0.5)
 
     lines = [
         f"Training plan '{name}' push complete:",
-        f"• Success: {success}/{len(plan)}",
+        f"  Success: {success}/{len(plan)}",
     ]
     if errors:
-        lines.append(f"• Errors:  {len(errors)}/{len(plan)}")
+        lines.append(f"  Errors:  {len(errors)}/{len(plan)}")
         for e in errors:
-            lines.append(f"  ❌ {e}")
+            lines.append(f"    {e}")
 
-    lines.append("\n🔄 Sync your Garmin device to download the workouts.")
+    lines.append("\nSync your Garmin device to download the workouts.")
     return "\n".join(lines)
 
 
@@ -711,9 +749,9 @@ def delete_workout(workout_id: str) -> str:
     client = get_garmin()
     try:
         client.delete_workout(workout_id)
-        return f"✅ Workout {workout_id} deleted."
+        return f"Workout {workout_id} deleted."
     except Exception as e:
-        return f"❌ Failed to delete workout {workout_id}: {e}"
+        return f"Failed to delete workout {workout_id}: {e}"
 
 
 @mcp.tool()
@@ -725,6 +763,8 @@ def delete_plan_workouts(name_contains: str = "") -> str:
     Args:
         name_contains: String to match in workout names (e.g., "S1", "Venezia")
     """
+    import time as _time
+
     client = get_garmin()
     workouts = client.get_workouts(0, 200)
 
@@ -742,8 +782,7 @@ def delete_plan_workouts(name_contains: str = "") -> str:
         try:
             client.delete_workout(w["workoutId"])
             deleted += 1
-            import time
-            time.sleep(0.3)
+            _time.sleep(0.3)
         except Exception:
             errors += 1
 
