@@ -28,6 +28,8 @@ import os
 import sys
 import json
 import logging
+import time
+import functools
 from datetime import datetime, timedelta, date
 from pathlib import Path
 from typing import Optional
@@ -126,6 +128,90 @@ def get_garmin() -> Garmin:
 
     _garmin_client = client
     return client
+
+
+def refresh_garmin_client() -> Garmin:
+    """Force re-authentication by clearing the cached client."""
+    global _garmin_client
+    _garmin_client = None
+    logger.info("Garmin client cleared — will re-authenticate on next call.")
+    return get_garmin()
+
+
+def garmin_retry(max_retries: int = 3, base_delay: float = 2.0, max_delay: float = 30.0):
+    """
+    Retry decorator for Garmin API calls with exponential backoff.
+
+    Handles:
+      - Network timeouts and connection errors
+      - HTTP 429 (rate limiting) — waits longer
+      - HTTP 401/403 (token expired) — refreshes auth and retries
+      - Garmin server errors (5xx) — retries with backoff
+
+    Args:
+        max_retries: Maximum number of retry attempts (default 3)
+        base_delay: Initial delay in seconds (doubles each retry)
+        max_delay: Maximum delay between retries
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    err_str = str(e).lower()
+
+                    # Don't retry on bad input
+                    if any(msg in err_str for msg in ["invalid", "json", "missing", "required"]):
+                        raise
+
+                    # On last attempt, give up
+                    if attempt == max_retries:
+                        logger.error(
+                            "Garmin API call %s failed after %d attempts: %s",
+                            func.__name__, max_retries + 1, e,
+                        )
+                        break
+
+                    # Calculate delay with exponential backoff + jitter
+                    delay = min(base_delay * (2 ** attempt), max_delay)
+
+                    # Token expired → refresh and retry immediately
+                    if any(code in err_str for code in ["401", "403", "unauthorized", "forbidden", "token"]):
+                        logger.warning(
+                            "Auth error in %s (attempt %d/%d): %s — refreshing token...",
+                            func.__name__, attempt + 1, max_retries + 1, e,
+                        )
+                        try:
+                            refresh_garmin_client()
+                        except Exception as auth_err:
+                            logger.error("Re-authentication failed: %s", auth_err)
+                        delay = 1.0  # Quick retry after re-auth
+
+                    # Rate limited → wait longer
+                    elif "429" in err_str or "rate" in err_str:
+                        delay = min(delay * 3, max_delay)
+                        logger.warning(
+                            "Rate limited in %s (attempt %d/%d) — waiting %.1fs...",
+                            func.__name__, attempt + 1, max_retries + 1, delay,
+                        )
+
+                    # Timeout / connection error / server error
+                    else:
+                        logger.warning(
+                            "Garmin API error in %s (attempt %d/%d): %s — retrying in %.1fs...",
+                            func.__name__, attempt + 1, max_retries + 1, e, delay,
+                        )
+
+                    time.sleep(delay)
+
+            # All retries exhausted
+            return f"Error after {max_retries + 1} attempts: {last_exception}"
+        return wrapper
+    return decorator
 
 
 # ============================================================
@@ -300,6 +386,7 @@ mcp = FastMCP(
 
 
 @mcp.tool()
+@garmin_retry()
 def get_activities(
     limit: int = 20,
     start: int = 0,
@@ -353,6 +440,7 @@ def get_activities(
 
 
 @mcp.tool()
+@garmin_retry()
 def get_activity_details(activity_id: str) -> str:
     """
     Get detailed data for a specific Garmin activity.
@@ -369,6 +457,7 @@ def get_activity_details(activity_id: str) -> str:
 
 
 @mcp.tool()
+@garmin_retry()
 def get_health_summary(date_str: str) -> str:
     """
     Get daily health metrics from Garmin.
@@ -462,6 +551,7 @@ def get_health_summary(date_str: str) -> str:
 
 
 @mcp.tool()
+@garmin_retry()
 def get_training_status(days: int = 7) -> str:
     """
     Get training load summary for recent days.
@@ -515,6 +605,7 @@ def get_training_status(days: int = 7) -> str:
 
 
 @mcp.tool()
+@garmin_retry()
 def get_workouts(limit: int = 20) -> str:
     """
     List workouts saved on Garmin Connect.
@@ -544,6 +635,7 @@ def get_workouts(limit: int = 20) -> str:
 
 
 @mcp.tool()
+@garmin_retry()
 def push_workout(
     name: str,
     steps_json: str,
@@ -669,6 +761,7 @@ def push_workout(
 
 
 @mcp.tool()
+@garmin_retry(max_retries=2)
 def push_training_plan(
     name: str,
     start_date: str,
@@ -696,7 +789,7 @@ def push_training_plan(
     except json.JSONDecodeError as e:
         return f"Invalid plan JSON: {e}"
 
-    import time as _time
+
 
     base = date.fromisoformat(start_date)
     success = 0
@@ -723,7 +816,7 @@ def push_training_plan(
         except Exception as e:
             errors.append(f"Day +{offset} ({w_name}): {e}")
 
-        _time.sleep(0.5)
+        time.sleep(0.5)
 
     lines = [
         f"Training plan '{name}' push complete:",
@@ -739,6 +832,7 @@ def push_training_plan(
 
 
 @mcp.tool()
+@garmin_retry()
 def delete_workout(workout_id: str) -> str:
     """
     Delete a workout from Garmin Connect.
@@ -755,6 +849,7 @@ def delete_workout(workout_id: str) -> str:
 
 
 @mcp.tool()
+@garmin_retry()
 def delete_plan_workouts(name_contains: str = "") -> str:
     """
     Delete all workouts whose name contains the given string.
@@ -763,7 +858,7 @@ def delete_plan_workouts(name_contains: str = "") -> str:
     Args:
         name_contains: String to match in workout names (e.g., "S1", "Venezia")
     """
-    import time as _time
+
 
     client = get_garmin()
     workouts = client.get_workouts(0, 200)
@@ -782,7 +877,7 @@ def delete_plan_workouts(name_contains: str = "") -> str:
         try:
             client.delete_workout(w["workoutId"])
             deleted += 1
-            _time.sleep(0.3)
+            time.sleep(0.3)
         except Exception:
             errors += 1
 

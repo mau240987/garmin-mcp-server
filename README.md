@@ -20,6 +20,16 @@ Built on the battle-tested [garminconnect](https://github.com/cyberjunky/python-
 | `delete_workout` | Write | Delete a specific workout |
 | `delete_plan_workouts` | Write | Bulk-delete workouts by name pattern |
 
+### Resilience
+
+All tools include automatic retry with exponential backoff:
+
+- **3 retries** by default (2 for `push_training_plan` to avoid duplicates)
+- **Exponential backoff**: 2s → 4s → 8s (capped at 30s)
+- **Token refresh**: 401/403 errors trigger automatic re-authentication
+- **Rate limiting**: 429 responses get triple the normal delay
+- **Smart skip**: input validation errors (bad JSON, missing args) fail immediately without retry
+
 ---
 
 ## Setup
