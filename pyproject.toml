@@ -51,11 +51,11 @@ garmin-mcp-server = "garmin_mcp_server:main"
 
 [tool.hatch.build.targets.wheel]
 # Single-module package
-only-include = ["garmin_mcp_server.py"]
+only-include = ["garmin_coach_mcp_server.py"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "garmin_mcp_server.py",
+    "garmin_coach_mcp_server.py",
     "README.md",
     "LICENSE",
     "requirements.txt",
