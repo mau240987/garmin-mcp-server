@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "garmin-mcp-server"
+name = "garmin-coach-mcp-server"
 version = "0.2.0"
 description = "MCP Server for Garmin Connect — read activities, health data, and push training plans from any AI assistant"
 readme = "README.md"
