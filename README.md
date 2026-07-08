@@ -3,7 +3,7 @@
 <!-- mcp-name: io.github.mau240987/garmin-mcp-server -->
 
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
-![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
+![License: AGPL 3.0]([https://img.shields.io/badge/License-MIT-green.svg](https://img.shields.io/badge/License-AGPL3.0-green.svg))
 ![MCP](https://img.shields.io/badge/MCP-compatible-8A2BE2.svg)
 ![PyPI](https://img.shields.io/pypi/v/garmin-mcp-server.svg)
 
