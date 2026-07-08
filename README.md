@@ -1,5 +1,7 @@
 # garmin-mcp-server
 
+<!-- mcp-name: io.github.mau240987/garmin-mcp-server -->
+
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 ![MCP](https://img.shields.io/badge/MCP-compatible-8A2BE2.svg)
